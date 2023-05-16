@@ -1,3 +1,5 @@
+branches:
+  - name: main
 plugins:
   - - "@semantic-release/commit-analyzer"
     - releaseRules:
@@ -5,9 +7,9 @@ plugins:
         - { type: fix, release: patch }
         - { type: chore, release: patch }
         - { type: refactor, release: patch }
-        - { type: feat, release: minor }
-        - { type: ci, release: false }
-        - { type: style, release: false }
+        - { type: feat, release: patch }
+        - { type: ci, release: patch }
+        - { type: style, release: patch }
       parserOpts:
         noteKeywords:
           - MAJOR RELEASE
