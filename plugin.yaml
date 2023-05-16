@@ -1,0 +1,9 @@
+# Plugin Definition below. This is essentially a valid helm values file that will be merged
+# with the other vcluster values during vcluster create or helm install.
+plugin:
+  sync-all-configmaps:
+    image: ghcr.io/loft-sh/vcluster-example-sync-all-configmaps:v1
+syncer:
+  extraArgs:
+    # disable built-in ConfigMaps syncer because we replace it with our own implementation
+    - "--sync=-configmaps"
