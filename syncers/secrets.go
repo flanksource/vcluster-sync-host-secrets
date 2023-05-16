@@ -128,7 +128,7 @@ func (s *secretSyncer) Sync(ctx *syncercontext.SyncContext, pObj client.Object, 
 
 	err := ctx.VirtualClient.Update(ctx.Context, updated)
 	if err == nil {
-		ctx.Log.Infof("updated secret %s/%s", vObj.GetNamespace(), vObj.GetName(), constants.Annotation)
+		ctx.Log.Infof("updated secret %s/%s", vObj.GetNamespace(), vObj.GetName())
 	} else {
 		err = fmt.Errorf("failed to update secret %s/%s: %v", vObj.GetNamespace(), vObj.GetName(), err)
 	}
