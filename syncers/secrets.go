@@ -2,123 +2,219 @@ package syncers
 
 import (
 	"context"
+	"fmt"
+
+	"github.com/flanksource/vcluster-sync-host-secrets/constants"
 
 	"github.com/loft-sh/vcluster-sdk/syncer"
 	syncercontext "github.com/loft-sh/vcluster-sdk/syncer/context"
-	"github.com/loft-sh/vcluster-sdk/syncer/translator"
+	"github.com/loft-sh/vcluster-sdk/translate"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func NewSecretSyncer(ctx *syncercontext.RegisterContext) *SecretSyncer {
-	return &SecretSyncer{
-		NamespacedTranslator: translator.NewNamespacedTranslator(ctx, "secret", &corev1.Secret{}),
+var (
+	ManagedHostSecret = "plugin.vcluster.loft.sh/managed-by"
+)
+
+func NewSecretSyncer(ctx *syncercontext.RegisterContext, destinationNamespace string) syncer.Syncer {
+	return &secretSyncer{
+		hostNamespace:        ctx.TargetNamespace,
+		DestinationNamespace: destinationNamespace,
 	}
 }
 
-type SecretSyncer struct {
-	translator.NamespacedTranslator
-	syncer.UpSyncer
+type secretSyncer struct {
+	hostNamespace        string
+	DestinationNamespace string
+}
+
+func (s *secretSyncer) Name() string {
+	return constants.PluginName
+}
+
+func (s *secretSyncer) Resource() client.Object {
+	return &corev1.Secret{}
 }
 
 // Make sure the interface is implemented
-var _ syncer.Syncer = &SecretSyncer{}
+var _ syncer.Starter = &secretSyncer{}
 
-func (s *SecretSyncer) SyncDown(ctx *syncercontext.SyncContext, vObj client.Object) (ctrl.Result, error) {
-	return s.SyncDownCreate(ctx, vObj, s.translate(vObj.(*corev1.Secret)))
+// ReconcileStart is executed before the syncer or fake syncer reconcile starts and can
+// return true if the rest of the reconcile should be skipped. If an error is returned,
+// the reconcile will fail and try to requeue.
+func (s *secretSyncer) ReconcileStart(ctx *syncercontext.SyncContext, req ctrl.Request) (bool, error) {
+	// reconcile can be skipped if the Secret that triggered this reconciliation request
+	// is not from the DestinationNamespace
+	return req.Namespace != s.DestinationNamespace, nil
 }
 
-func (s *SecretSyncer) SyncUp(ctx *syncercontext.SyncContext, pObj client.Object) (ctrl.Result, error) {
-	managed, err := s.IsManaged(pObj)
-	if err != nil {
-		return ctrl.Result{Requeue: true}, err
-	}
-	// Only sync secrets originating in the host cluster to the vcluster
-	if !managed {
-		pSecret := pObj.(*corev1.Secret)
-		pSecret.ObjectMeta.ResourceVersion = ""
-		immutable := true
-		pSecret.Immutable = &immutable
-		err = ctx.VirtualClient.Create(context.Background(), pSecret)
-		return ctrl.Result{Requeue: true}, err
-	}
-	return ctrl.Result{Requeue: true}, nil
+func (s *secretSyncer) ReconcileEnd() {
+	// NOOP
 }
 
-func (s *SecretSyncer) SyncUpUpdate(ctx *syncercontext.SyncContext, pObj client.Object, vObj client.Object) (ctrl.Result, error) {
-	managed, err := s.IsManaged(pObj)
-	if err != nil {
-		return ctrl.Result{Requeue: true}, err
-	}
-	// Only sync secrets originating in the host cluster to the vcluster
-	if !managed {
-		pSecret := pObj.(*corev1.Secret)
-		immutable := true
-		pSecret.Immutable = &immutable
-		err = ctx.PhysicalClient.Update(context.Background(), pObj)
-		return ctrl.Result{Requeue: true}, err
-	}
-	return ctrl.Result{}, nil
-}
-
-func (s *SecretSyncer) Sync(ctx *syncercontext.SyncContext, pObj client.Object, vObj client.Object) (ctrl.Result, error) {
+// SyncUp will synchronise physical secrets into the vcluster
+func (s *secretSyncer) SyncUp(ctx *syncercontext.SyncContext, pObj client.Object) (ctrl.Result, error) {
 	pSecret := pObj.(*corev1.Secret)
+	if pSecret.GetAnnotations()[constants.Annotation] != "true" {
+		// Only sync selected secrets from the host cluster
+		return ctrl.Result{}, nil
+	}
+	if pSecret.GetLabels()[translate.MarkerLabel] != "" {
+		// Ignore secrets synced to the host by the vcluster
+		return ctrl.Result{}, nil
+	}
+	labels := map[string]string{
+		ManagedHostSecret: constants.PluginName,
+	}
+	for k, v := range pSecret.GetLabels() {
+		labels[k] = v
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   s.DestinationNamespace,
+			Name:        pObj.GetName(),
+			Annotations: pObj.GetAnnotations(),
+			Labels:      labels,
+		},
+		Immutable:  pSecret.Immutable,
+		Data:       pSecret.Data,
+		Type:       pSecret.Type,
+		StringData: pSecret.StringData,
+	}
+
+	err := ctx.VirtualClient.Create(context.Background(), secret)
+	if err == nil {
+		ctx.Log.Infof("created secret %s/%s", secret.GetNamespace(), secret.GetName())
+	} else {
+		err = fmt.Errorf("failed to create secret %s/%s: %v", secret.GetNamespace(), secret.GetName(), err)
+	}
+	return ctrl.Result{}, err
+}
+
+// Sync defines the action that should be taken by the syncer if a virtual cluster object
+// and physical cluster object exist and either one of them has changed. The syncer is
+// expected to reconcile in this case without knowledge of which object has actually
+// changed. This is needed to avoid race conditions and defining a clear hierarchy what
+// fields should be managed by which cluster. For example, for pods you would want to sync
+// down (virtual -> physical) spec changes, while you would want to sync up
+// (physical -> virtual) status changes, as those would get set only by the physical host
+// cluster.
+func (s *secretSyncer) Sync(ctx *syncercontext.SyncContext, pObj client.Object, vObj client.Object) (ctrl.Result, error) {
+	pSecret := pObj.(*corev1.Secret)
+	if pSecret.GetAnnotations()[constants.Annotation] != "true" {
+		if vObj.GetLabels()[ManagedHostSecret] == constants.PluginName {
+			// delete synced secret if the host secret no longer has the correct annotation
+			err := ctx.VirtualClient.Delete(ctx.Context, vObj)
+			if err == nil {
+				ctx.Log.Infof("deleted secret %s/%s because host secret is no longer is annotated as %s: true", vObj.GetNamespace(), vObj.GetName(), constants.Annotation)
+			} else {
+				err = fmt.Errorf("failed to delete secret %s/%s: %v", vObj.GetNamespace(), vObj.GetName(), err)
+			}
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
 	vSecret := vObj.(*corev1.Secret)
-	if pSecret.Immutable != nil && vSecret.Immutable != nil && *pSecret.Immutable && !*vSecret.Immutable {
-		// if the Secret in the host is Immutable, while Secret in vcluster
-		// is not Immutable, then we need to delete it from the host to reconcile
-		// it into the expected state. We force requeue to trigger recreation.
-		_, err := syncer.DeleteObject(ctx, pObj)
-		return ctrl.Result{Requeue: true}, err
-	}
-	managed, err := s.IsManaged(pSecret)
-	if err != nil {
-		return ctrl.Result{Requeue: true}, err
+	updated := s.translateUpdateUp(pSecret, vSecret)
+	if updated == nil {
+		// No updated needed
+		return ctrl.Result{}, nil
 	}
 
-	if managed {
-		return s.SyncDownUpdate(ctx, vObj, s.translateUpdate(pSecret, vSecret))
+	err := ctx.VirtualClient.Update(ctx.Context, updated)
+	if err == nil {
+		ctx.Log.Infof("updated secret %s/%s", vObj.GetNamespace(), vObj.GetName(), constants.Annotation)
+	} else {
+		err = fmt.Errorf("failed to update secret %s/%s: %v", vObj.GetNamespace(), vObj.GetName(), err)
 	}
-	return s.SyncUpUpdate(ctx, s.translateUpdate(vSecret, pSecret), pObj)
+	return ctrl.Result{}, err
 }
 
-func (s *SecretSyncer) translate(vObj client.Object) *corev1.Secret {
-	return s.TranslateMetadata(vObj).(*corev1.Secret)
+// SyncDown is called when the secret in the host gets removed
+// or if the vObj is an unrelated Secret created in vcluster
+func (s *secretSyncer) SyncDown(ctx *syncercontext.SyncContext, vObj client.Object) (ctrl.Result, error) {
+	if vObj.GetLabels()[ManagedHostSecret] == constants.PluginName {
+		// Delete synced secret because the host secret was deleted
+		err := ctx.VirtualClient.Delete(ctx.Context, vObj)
+		if err == nil {
+			ctx.Log.Infof("deleted secret %s/%s because host secret no longer exists", vObj.GetNamespace(), vObj.GetName())
+		} else {
+			err = fmt.Errorf("failed to delete secret %s/%s: %v", vObj.GetNamespace(), vObj.GetName(), err)
+		}
+		return ctrl.Result{}, err
+	}
+	// Ignore all unrelated secrets
+	return ctrl.Result{}, nil
+
 }
 
-// translateUpdate returns nil if the host side Secret doesn't need to be updated,
-// otherwise it returns an updated Secret.
-// Note: the caller has to cover the case where the vObj.Immutable is true, and pObj.Immutable is false
-func (s *SecretSyncer) translateUpdate(pObj, vObj *corev1.Secret) *corev1.Secret {
+// IsManaged determines if a physical object is managed by the vcluster
+func (s *secretSyncer) IsManaged(pObj client.Object) (bool, error) {
+	// We will consider all Secrets as managed in order to reconcile
+	// when a secret type changes, and we will check the annotations
+	// in the Sync and SyncUp methods and ignore the irrelevant ones
+	return true, nil
+}
+
+// VirtualToPhysical translates a virtual name to a physical name
+func (s *secretSyncer) VirtualToPhysical(req types.NamespacedName, vObj client.Object) types.NamespacedName {
+	// The secret that is being mirrored by a particular vObj secret
+	// is located in the hostNamespace of the host cluster
+	return types.NamespacedName{
+		Namespace: s.hostNamespace,
+		Name:      req.Name,
+	}
+}
+
+// PhysicalToVirtual translates a physical name to a virtual name
+func (s *secretSyncer) PhysicalToVirtual(pObj client.Object) types.NamespacedName {
+	// The secret mirrored to the vcluster is always named the same as the original in the
+	// host and is located in the DestinationNamespace
+	return types.NamespacedName{
+		Namespace: s.DestinationNamespace,
+		Name:      pObj.GetName(),
+	}
+}
+
+func (s *secretSyncer) translateUpdateUp(pObj, vObj *corev1.Secret) *corev1.Secret {
 	var updated *corev1.Secret
 
-	// check if the annotations or labels have changed
-	changed, updatedAnnotations, updatedLabels := s.TranslateMetadataUpdate(vObj, pObj)
-	if changed {
-		updated = newIfNil(updated, pObj)
-		updated.Labels = updatedLabels
-		updated.Annotations = updatedAnnotations
+	// sync annotations
+	// We sync all of them from the host and remove any added in the vcluster
+	if !equality.Semantic.DeepEqual(vObj.GetAnnotations(), pObj.GetAnnotations()) {
+		updated = newIfNil(updated, vObj)
+		updated.Annotations = pObj.GetAnnotations()
 	}
 
-	// check if the data has changed
+	// sync lables
+	// We sync all of them from the host, add one more to be able to detect
+	// secrets synced by this plugin, and we remove any added in the vcluster
+	expectedLabels := map[string]string{
+		ManagedHostSecret: constants.PluginName,
+	}
+	for k, v := range pObj.GetLabels() {
+		expectedLabels[k] = v
+	}
+	if !equality.Semantic.DeepEqual(vObj.GetLabels(), expectedLabels) {
+		updated = newIfNil(updated, vObj)
+		updated.Labels = expectedLabels
+	}
+
+	// sync data
 	if !equality.Semantic.DeepEqual(vObj.Data, pObj.Data) {
-		updated = newIfNil(updated, pObj)
-		updated.Data = vObj.Data
+		updated = newIfNil(updated, vObj)
+		updated.Data = pObj.Data
 	}
 
-	// check if the string data has changed
+	// sync string data
 	if !equality.Semantic.DeepEqual(vObj.StringData, pObj.StringData) {
-		updated = newIfNil(updated, pObj)
-		updated.StringData = vObj.StringData
-	}
-
-	// check if the Immutable field has changed
-	// Note: the caller has to cover the case where the vObj.Immutable is true, and pObj.Immutable is false
-	if !equality.Semantic.DeepEqual(vObj.Immutable, pObj.Immutable) {
-		updated = newIfNil(updated, pObj)
-		updated.Immutable = vObj.Immutable
+		updated = newIfNil(updated, vObj)
+		updated.StringData = pObj.StringData
 	}
 
 	return updated

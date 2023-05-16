@@ -3,4 +3,3 @@
 /.devspace
 /kubeconfig.yaml
 .DS_Store
-/vendor

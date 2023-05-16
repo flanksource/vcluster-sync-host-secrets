@@ -1,12 +1,25 @@
 package main
 
 import (
-	"github.com/flanksource/vcluster-sync-all-secrets/syncers"
+	"os"
+
+	"github.com/flanksource/vcluster-sync-host-secrets/syncers"
 	"github.com/loft-sh/vcluster-sdk/plugin"
 )
 
+const (
+	DefaultDestinationNamespace = "default"
+	DestinationNamespaceEnvVar  = "DESTINATION_NAMESPACE"
+)
+
 func main() {
+	// resolve configuration from environment variables
+	destinationNamespace := os.Getenv(DestinationNamespaceEnvVar)
+	if destinationNamespace == "" {
+		destinationNamespace = DefaultDestinationNamespace
+	}
+
 	ctx := plugin.MustInit()
-	plugin.MustRegister(syncers.NewSecretSyncer(ctx))
+	plugin.MustRegister(syncers.NewSecretSyncer(ctx, destinationNamespace))
 	plugin.MustStart()
 }
