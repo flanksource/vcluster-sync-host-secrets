@@ -13,7 +13,7 @@ To use the plugin, create a new vcluster with the `plugin.yaml`:
 
 ```
 # Use public plugin.yaml
-vcluster create my-vcluster -n my-vcluster -f https://raw.githubusercontent.com/flanksource/vcluster-sync-host-secrets/main/plugin.yaml
+vcluster create my-vcluster -n my-vcluster -f https://github.com/flanksource/vcluster-sync-host-secrets/releases/download/v0.1.3/plugin.yaml
 ```
 
 This will create a new vcluster with the plugin installed. After that, wait for vcluster to start up and check:
