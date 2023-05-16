@@ -25,7 +25,7 @@ jobs:
         run: |
           git fetch --prune --unshallow
           echo "RELEASE_VERSION=$(git describe --abbrev=0 --tags | sed -e 's/^v//')" >> $GITHUB_ENV
-          sed -i "s/:v0/:v$RELEASE_VERSION" plugin.yaml
+          sed -i "s/:v0/:v$RELEASE_VERSION/" plugin.yaml
       - name: Upload plugin manifest to action run
         uses: actions/upload-artifact@v2
         with:
