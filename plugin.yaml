@@ -2,4 +2,4 @@
 # with the other vcluster values during vcluster create or helm install.
 plugin:
   sync-host-secrets:
-    image: ghcr.io/flanksource/vcluster-sync-host-secrets:v1
+    image: ghcr.io/flanksource/vcluster-sync-host-secrets:v0
