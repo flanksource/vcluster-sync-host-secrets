@@ -60,7 +60,7 @@ func (s *secretSyncer) ReconcileEnd() {
 // SyncUp will synchronise physical secrets into the vcluster
 func (s *secretSyncer) SyncUp(ctx *syncercontext.SyncContext, pObj client.Object) (ctrl.Result, error) {
 	pSecret := pObj.(*corev1.Secret)
-	if pSecret.GetAnnotations()[constants.Annotation] != "true" {
+	if pSecret.GetAnnotations()[constants.SyncAnnotation] != "true" {
 		// Only sync selected secrets from the host cluster
 		return ctrl.Result{}, nil
 	}
@@ -74,9 +74,13 @@ func (s *secretSyncer) SyncUp(ctx *syncercontext.SyncContext, pObj client.Object
 	for k, v := range pSecret.GetLabels() {
 		labels[k] = v
 	}
+	namespace := s.DestinationNamespace
+	if pSecret.GetAnnotations()[constants.NamespaceAnnotation] != "" {
+		namespace = pSecret.GetAnnotations()[constants.NamespaceAnnotation]
+	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace:   s.DestinationNamespace,
+			Namespace:   namespace,
 			Name:        pObj.GetName(),
 			Annotations: pObj.GetAnnotations(),
 			Labels:      labels,
@@ -106,12 +110,12 @@ func (s *secretSyncer) SyncUp(ctx *syncercontext.SyncContext, pObj client.Object
 // cluster.
 func (s *secretSyncer) Sync(ctx *syncercontext.SyncContext, pObj client.Object, vObj client.Object) (ctrl.Result, error) {
 	pSecret := pObj.(*corev1.Secret)
-	if pSecret.GetAnnotations()[constants.Annotation] != "true" {
+	if pSecret.GetAnnotations()[constants.SyncAnnotation] != "true" {
 		if vObj.GetLabels()[ManagedHostSecret] == constants.PluginName {
 			// delete synced secret if the host secret no longer has the correct annotation
 			err := ctx.VirtualClient.Delete(ctx.Context, vObj)
 			if err == nil {
-				ctx.Log.Infof("deleted secret %s/%s because host secret is no longer is annotated as %s: true", vObj.GetNamespace(), vObj.GetName(), constants.Annotation)
+				ctx.Log.Infof("deleted secret %s/%s because host secret is no longer is annotated as %s: true", vObj.GetNamespace(), vObj.GetName(), constants.SyncAnnotation)
 			} else {
 				err = fmt.Errorf("failed to delete secret %s/%s: %v", vObj.GetNamespace(), vObj.GetName(), err)
 			}

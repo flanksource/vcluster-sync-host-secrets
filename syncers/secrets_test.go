@@ -20,7 +20,7 @@ func TestSyncUp(t *testing.T) {
 			Name:      "test-secret",
 			Namespace: "test",
 			Annotations: map[string]string{
-				constants.Annotation: "true",
+				constants.SyncAnnotation: "true",
 			},
 		},
 	}
@@ -28,6 +28,25 @@ func TestSyncUp(t *testing.T) {
 		ObjectMeta: baseSecret.ObjectMeta,
 	}
 	syncedSecret.Labels = map[string]string{
+		ManagedHostSecret: constants.PluginName,
+	}
+	newNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "other-test",
+		},
+	}
+	namespaceSecret := &corev1.Secret{
+		ObjectMeta: baseSecret.ObjectMeta,
+	}
+	namespaceSecret.ObjectMeta.Annotations = map[string]string{
+		constants.SyncAnnotation:      "true",
+		constants.NamespaceAnnotation: newNamespace.Name,
+	}
+	syncedNamespaceSecret := &corev1.Secret{
+		ObjectMeta: namespaceSecret.ObjectMeta,
+	}
+	syncedNamespaceSecret.Namespace = newNamespace.Name
+	syncedNamespaceSecret.Labels = map[string]string{
 		ManagedHostSecret: constants.PluginName,
 	}
 
@@ -56,6 +75,25 @@ func TestSyncUp(t *testing.T) {
 			Sync: func(ctx *synccontext.RegisterContext) {
 				syncCtx, syncer := generictesting.FakeStartSyncer(t, ctx, newSyncer)
 				_, err := syncer.(*secretSyncer).SyncUp(syncCtx, baseSecret)
+				assert.NilError(t, err)
+			},
+		},
+		{
+			Name: "Create virtual secret in different namespace",
+			InitialPhysicalState: []runtime.Object{
+				namespaceSecret,
+			},
+			InitialVirtualState: []runtime.Object{
+				newNamespace,
+			},
+			ExpectedVirtualState: map[schema.GroupVersionKind][]runtime.Object{
+				corev1.SchemeGroupVersion.WithKind("Secret"): {
+					syncedNamespaceSecret,
+				},
+			},
+			Sync: func(ctx *synccontext.RegisterContext) {
+				syncCtx, syncer := generictesting.FakeStartSyncer(t, ctx, newSyncer)
+				_, err := syncer.(*secretSyncer).SyncUp(syncCtx, namespaceSecret)
 				assert.NilError(t, err)
 			},
 		},

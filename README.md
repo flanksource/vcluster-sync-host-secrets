@@ -37,8 +37,9 @@ data:
 vcluster connect my-vcluster -n my-vcluster -- kubectl get secrets
 ```
 
-The secret is deployed into the VCluster's default namespace, this can be
-changed via the `DESTINATION_NAMESPACE` environment variable:
+The secret is deployed into the vcluster's default namespace, this can be
+changed via the `DESTINATION_NAMESPACE` environment variable for all synced
+secrets:
 
 ```yaml
 plugin:
@@ -47,6 +48,10 @@ plugin:
       - name: DESTINATION_NAMESPACE
         value: dest-ns-inside-vcluster
 ```
+
+Alternatively, the annotation `com.flanksource/vluster-namespace` can be used to
+specify a namespace to sync to. The plugin will not create this namespace if it
+doesn't exist. It is the user's responsibility to ensure that it exists.
 
 ### Building the Plugin
 To just build the plugin image and push it to the registry, run:
