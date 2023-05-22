@@ -16,14 +16,36 @@ To use the plugin, create a new vcluster with the `plugin.yaml`:
 vcluster create my-vcluster -n my-vcluster -f https://github.com/flanksource/vcluster-sync-host-secrets/releases/download/v0.1.3/plugin.yaml
 ```
 
-This will create a new vcluster with the plugin installed. After that, wait for vcluster to start up and check:
+This will create a new vcluster with the plugin installed. After that, wait for
+vcluster to start up and create a secret in the host cluster:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysecret
+  namespace: my-vcluster
+  annotations:
+    com.flanksource/vcluster-sync: "true"
+data:
+  special.how: dmVyeQ==
+  special.type: Y2hhcm0=
+```
 
 ```
-# Create a config map in the virtual cluster
-kubectl create secret generic mysecret -n my-vcluster --from-literal=special.how=very --from-literal=special.type=charm
-
-# Check if the configmap was synced to the host cluster
+# Check if the secret was synced to the host cluster
 vcluster connect my-vcluster -n my-vcluster -- kubectl get secrets
+```
+
+The secret is deployed into the VCluster's default namespace, this can be
+changed via the `DESTINATION_NAMESPACE` environment variable:
+
+```yaml
+plugin:
+  sync-host-secrets:
+    env:
+      - name: DESTINATION_NAMESPACE
+        value: dest-ns-inside-vcluster
 ```
 
 ### Building the Plugin
