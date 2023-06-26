@@ -49,9 +49,9 @@ plugin:
         value: dest-ns-inside-vcluster
 ```
 
-Alternatively, the annotation `com.flanksource/vluster-namespace` can be used to
-specify a namespace to sync to. The plugin will not create this namespace if it
-doesn't exist. It is the user's responsibility to ensure that it exists.
+Alternatively, the annotation `com.flanksource/vcluster-namespace` can be used
+to specify a namespace to sync to. The plugin will not create this namespace if
+it doesn't exist. It is the user's responsibility to ensure that it exists.
 
 ### Building the Plugin
 To just build the plugin image and push it to the registry, run:
