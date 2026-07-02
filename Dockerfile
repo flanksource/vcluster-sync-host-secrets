@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM golang:1.17 as builder
+FROM golang:1.26.1-bookworm@sha256:ab3d6955bbc813a0f3fdf220c1d817dd89c0b3f283777db8ece4a32fe7858edd AS builder
 
 # Make sure we use go modules
 WORKDIR vcluster
